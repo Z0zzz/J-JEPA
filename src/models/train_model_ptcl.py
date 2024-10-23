@@ -242,6 +242,7 @@ def main(rank, world_size, args):
     options.var_loss_weight = args.var_loss_weight
     options.base_momentum = args.base_momentum
     options.encoder_pos_emb = False
+    options.use_parT = True
 
     setup_logging(rank, args.output_dir)
     logger.info(f"Initialized (rank/world-size) {rank}/{world_size}")
@@ -374,7 +375,7 @@ def main(rank, world_size, args):
 
     for epoch in range(options.start_epochs, options.num_epochs):
         logger.info("Epoch %d" % (epoch + 1))
-        logger.info("lr: %f" % scheduler.get_last_lr()[0])        
+        logger.info("lr: %f" % scheduler.get_last_lr()[0])
         epoch_start_time = time.time()
 
         if train_sampler:
@@ -431,9 +432,11 @@ def main(rank, world_size, args):
                 -1, -1, 4
             )  # Shape: [B, N, 4]
 
-                        # End Data Loading Timer
+            # End Data Loading Timer
             end_data_loading = time.time()
-            logger.info(f"Data loading time for batch {itr}: {end_data_loading - start_data_loading:.3f} seconds")
+            logger.info(
+                f"Data loading time for batch {itr}: {end_data_loading - start_data_loading:.3f} seconds"
+            )
 
             # Start Forward Pass Timer
             start_forward_pass = time.time()
@@ -531,7 +534,9 @@ def main(rank, world_size, args):
 
             # end forward pass timer
             end_forward_pass = time.time()
-            logger.info(f"Forward pass time for batch {itr}: {end_forward_pass - start_forward_pass:.3f} seconds")
+            logger.info(
+                f"Forward pass time for batch {itr}: {end_forward_pass - start_forward_pass:.3f} seconds"
+            )
 
             loss_meter_train.update(loss_dict["total_loss"])
             mse_loss_meter_train.update(loss_dict["mse_loss"])
