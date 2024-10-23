@@ -10,6 +10,7 @@ from src.util import create_pos_emb_fn
 from src.options import Options
 from src.util.tensors import trunc_normal_
 from src.util.DimensionCheckLayer import DimensionCheckLayer
+from src.util.create_pos_emb_input import create_pos_emb_input
 
 from src.models.ParT.ParticleTransformerEncoder import ParTEncoder, ParTPredictor
 
@@ -176,7 +177,7 @@ class JetsTransformer(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, x, particle_masks, split_mask):
+    def forward(self, x, particle_masks, split_mask, stats=None):
         if self.options.debug:
             print(f"JetsTransformer forward pass with input shape: {x.shape}")
 
@@ -192,7 +193,8 @@ class JetsTransformer(nn.Module):
         x = x.view(B, N, -1)
 
         # Add positional embeddings
-        pos_emb = self.calc_pos_emb(x)
+        pos_emb_input = create_pos_emb_input(x, stats, particle_masks)
+        pos_emb = self.calc_pos_emb(pos_emb_input)
         x = x + pos_emb
 
         # Pass through transformer blocks
@@ -258,7 +260,13 @@ class JetsTransformerPredictor(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(
-        self, context_repr, context_mask, target_mask, context_p4=None, target_p4=None
+        self,
+        context_repr,
+        context_mask,
+        target_mask,
+        context_p4=None,
+        target_p4=None,
+        stats=None,
     ):
         if self.options.debug:
             print(f"JetsTransformerPredictor forward pass")
@@ -277,14 +285,15 @@ class JetsTransformerPredictor(nn.Module):
         # Concatenate context representations and prediction tokens
         x = torch.cat([x, pred_token], dim=1)
 
+        # Create full particle mask
+        full_mask = torch.cat([context_mask, target_mask], dim=1)
+
         # Add positional embeddings
         if context_p4 is not None and target_p4 is not None:
             full_p4 = torch.cat([context_p4, target_p4], dim=1)
-            pos_emb = self.calc_predictor_pos_emb(full_p4)
+            pos_emb_input = create_pos_emb_input(full_p4, stats, full_mask)
+            pos_emb = self.calc_predictor_pos_emb(pos_emb_input)
             x = x + pos_emb
-
-        # Create full particle mask
-        full_mask = torch.cat([context_mask, target_mask], dim=1)
 
         if self.options.debug:
             print(f"  After concatenation:")
@@ -345,7 +354,7 @@ class JJEPA(nn.Module):
             self.context_check = DimensionCheckLayer("After Context Transformer", 3)
             self.predictor_check = DimensionCheckLayer("After Predictor", 3)
 
-    def forward(self, context, target, full_jet):
+    def forward(self, context, target, full_jet, stats):
         if self.options.debug:
             print(f"JJEPA forward pass")
             print(f"Context shape: {context['p4_spatial'].shape}")
@@ -362,26 +371,34 @@ class JJEPA(nn.Module):
             target["split_mask"].bool() if target["split_mask"] is not None else None
         )
 
-        # if self.use_parT:
-        # context_repr = self.context_transformer(
-        #     full_jet["p4"],
-        #     full_jet["p4_spatial"],
-        #     full_jet["particle_mask"],
-        #     context_split_mask,
-        # )
-        # target_repr = self.target_transformer(
-        #     full_jet["p4"],
-        #     full_jet["p4_spatial"],
-        #     full_jet["particle_mask"],
-        #     target_split_mask,
-        # )
-        # else:
-        context_repr = self.context_transformer(
-            full_jet["p4"], full_jet["particle_mask"], context_split_mask
-        )
-        target_repr = self.target_transformer(
-            full_jet["p4"], full_jet["particle_mask"], target_split_mask
-        )
+        if self.use_parT:
+            context_repr = self.context_transformer(
+                full_jet["p4"],
+                full_jet["p4_spatial"],
+                full_jet["particle_mask"],
+                context_split_mask,
+                stats=stats,
+            )
+            target_repr = self.target_transformer(
+                full_jet["p4"],
+                full_jet["p4_spatial"],
+                full_jet["particle_mask"],
+                target_split_mask,
+                stats=stats,
+            )
+        else:
+            context_repr = self.context_transformer(
+                full_jet["p4"],
+                full_jet["particle_mask"],
+                context_split_mask,
+                stats=stats,
+            )
+            target_repr = self.target_transformer(
+                full_jet["p4"],
+                full_jet["particle_mask"],
+                target_split_mask,
+                stats=stats,
+            )
         if self.options.debug:
             print(f"Context repr shape: {context_repr.shape}")
             print(f"Target repr shape: {target_repr.shape}")
@@ -396,6 +413,7 @@ class JJEPA(nn.Module):
                 target["particle_mask"],
                 target["p4"],
                 context["p4"],
+                stats=stats,
             )
             if self.options.debug:
                 pred_repr = self.predictor_check(pred_repr)
